@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+
+.links line {
+  stroke-opacity: 0.6;
+}
+
+.nodes circle, circle.center {
+  stroke: #fff;
+  stroke-width: 1.5px;
+}
+
+.bars rect {
+  fill: #666;
+  opacity: 0.3;
+}
+
+#output {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  pointer-events: none;
+}
+
+</style>
+<div id="output"></div>
+<svg width="960" height="600"></svg>
+<script src="d3.min.js"></script>
+<script src="math.js"></script>
+<script>
+
+math.config({number:'BigNumber', precision: 128});
+
+var primes = [2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,61,67,71,73,79,83,89,97,101,103,107,109,113,127,131,137,139,149,151,157,163,167,173,179,181,191,193,197,199,211,223,227,229,233,239,241,251,257,263,269,271,277,281,283,293,307,311,313,317,331,337,347,349,353,359,367,373,379,383,389,397,401,409,419,421,431,433,439,443,449,457,461,463,467,479,487,491,499,503,509,521,523,541,547,557,563,569,571,577,587,593,599,601,607,613,617,619,631,641,643,647,653,659,661,673,677,683,691,701,709,719,727,733,739,743,751,757,761,769,773,787,797,809,811,821,823,827,829,839,853,857,859,863,877,881,883,887,907,911,919,929,937,941,947,953,967,971,977,983,991,997,1009,1013,1019,1021,1031,1033,1039,1049,1051,1061,1063,1069,1087,1091,1093,1097,1103,1109,1117,1123,1129,1151,1153,1163,1171,1181,1187,1193,1201,1213,1217,1223,1229,1231,1237,1249,1259,1277,1279,1283,1289,1291,1297,1301,1303,1307,1319,1321,1327,1361,1367,1373,1381,1399,1409,1423,1427,1429,1433,1439,1447,1451,1453,1459,1471,1481,1483,1487,1489,1493,1499,1511,1523,1531,1543,1549,1553,1559,1567,1571,1579,1583,1597,1601,1607,1609,1613,1619,1621,1627,1637,1657,1663,1667,1669,1693,1697,1699,1709,1721,1723,1733,1741,1747,1753,1759,1777,1783,1787,1789,1801,1811,1823,1831,1847,1861,1867,1871,1873,1877,1879,1889,1901,1907,1913,1931,1933,1949,1951,1973,1979,1987,1993,1997,1999,2003,2011,2017,2027,2029,2039,2053,2063,2069,2081,2083,2087,2089,2099,2111,2113,2129,2131,2137,2141,2143,2153,2161,2179,2203,2207,2213,2221,2237,2239,2243,2251,2267,2269,2273,2281,2287,2293,2297,2309,2311,2333,2339,2341,2347,2351,2357,2371,2377,2381,2383,2389,2393,2399,2411,2417,2423,2437,2441,2447,2459,2467,2473,2477,2503,2521,2531,2539,2543,2549,2551,2557,2579,2591,2593];
+
+var svg = d3.select("svg"),
+    width = +svg.attr("width"),
+    height = +svg.attr("height");
+
+
+var graph = null;
+var lastClicked = null;
+var lastClickedBar = null;
+var n = 4;
+var edges = 6;
+var targetEnergy = math.bignumber(0);
+
+var simulation = d3.forceSimulation()
+      .on("tick", ticked);
+
+var sizeScale = d3.scaleLinear();
+let lineScale = d3.scaleLinear();
+let heightScale = d3.scaleLinear();
+let xScale = d3.scaleBand().rangeRound([20, width-20]).padding(0.1);
+
+svg.append("g")
+  .attr("class", "bars")
+svg.append("g")
+  .attr("class", "links");
+svg.append("g")
+  .attr("class", "nodes")
+
+svg.append('circle')
+  .attr('class', 'center')
+  .attr('cx', width/2)
+  .attr('cy', height/2)
+  .style('fill', '#883333')
+  .attr('r', 3)
+
+d3.json("latest.json", function(error, loadedgraph) {
+  if (error) throw error;
+
+  graph = loadedgraph;
+  n = graph.nodes.length;
+  edges = (n * (n - 1)) / 2;
+  targetEnergy = calcEnergy(n, edges);
+  update(graph);
+});
+
+function swap(next) {
+  if (lastClicked == null) {
+    lastClicked = next;
+    lastClicked.selected = true;
+    render(graph);
+    return;
+  } else if (lastClicked !== next) {
+    let tmp = lastClicked.value;
+    lastClicked.value = next.value;
+    next.value = tmp;
+    simulation.alpha(1);
+  }
+  lastClicked.selected = false;
+  lastClicked = null;
+  update(graph);
+}
+
+let queue = [];
+let bestGraphScore = null;
+
+function swapBar(next) {
+  if (lastClickedBar != null) {
+    return;
+  }
+  lastClickedBar = next;
+  lastClickedBar.selected = true;
+  render(graph);
+  for (var i = 0; i < graph.nodes.length; i++) {
+    let node = graph.nodes[i];
+    if (node == lastClickedBar) {
+      continue;
+    }
+    queue.push(node);
+  }
+
+  requestAnimationFrame(process);
+}
+
+function process() {
+  if (queue.length == 0) {
+    lastClickedBar = null;
+    simulation.alpha(1);
+    update(graph);
+    return;
+  }
+
+  let next = queue.shift();
+  next.selected = true;
+  render(graph);
+
+  let best = bestGraphScore || graph.score;
+  let found = false;
+  let n = lastClickedBar.edges.length;
+  for (var i = 0; i < n; i++) {
+    let lastEdge = lastClickedBar.edges[i];
+    for (var j = 0; j < n; j++) {
+      let temp = lastEdge.value;
+      let nextEdge = next.edges[j];
+      lastEdge.value = nextEdge.value;
+      nextEdge.value = temp;
+      score(graph);
+      let nextScore = graph.score;
+      if (math.smaller(nextScore, best)) {
+        found = true;
+        // break;
+
+        console.log(graph.nodes.length + '\n' + math.number(nextScore) + '\n' + logGraph(graph.nodes));
+        // showScore(graph);
+        best = graph.score;
+        // console.log(JSON.stringify(graph));
+      } else {
+        nextEdge.value = lastEdge.value;
+        lastEdge.value = temp;
+
+      }
+    }
+  }
+  requestAnimationFrame(process);  
+}
+
+
+
+// function swapBar(next) {
+//   if (lastClickedBar == null) {
+//     lastClickedBar = next;
+//     lastClickedBar.selected = true;
+//     render(graph);
+//     return;
+//   } else if (lastClickedBar !== next) {
+//     // Calc here
+//     let best = graph.score;
+//     let found = false;
+//     let n = lastClickedBar.edges.length;
+//     for (var i = 0; i < n; i++) {
+//       let lastEdge = lastClickedBar.edges[i];
+//       for (var j = 0; j < n; j++) {
+//         let temp = lastEdge.value;
+//         let nextEdge = next.edges[j];
+//         lastEdge.value = nextEdge.value;
+//         nextEdge.value = temp;
+//         let nextScore = score(graph);
+//         if (math.smaller(nextScore, best)) {
+//           // found = true;
+//           // break;
+//           console.log(logGraph(graph.nodes));
+//           // console.log(JSON.stringify(graph));
+//         } else {
+//           nextEdge.value = lastEdge.value;
+//           lastEdge.value = temp;
+
+//         }
+//       }
+//       if (found) {
+//         break;
+//       }
+//     }
+//     simulation.alpha(1);
+//   }
+//   lastClickedBar.selected = false;
+//   lastClickedBar = null;
+//   update(graph);
+// }
+
+function showScore(graph) {
+  score(graph);
+  let s = graph.score;
+  let output = d3.select('#output');
+  output.html(output.html() + "<div>" + math.format(s, {notation: 'fixed'}) + "</div>");
+}
+
+function update(graph) {
+  showScore(graph);
+
+  render(graph);
+  simulation.restart();
+}
+
+function ticked() {
+  svg.select('.links')
+    .selectAll("line")
+    .attr("x1", function(d) { return d.source.x; })
+    .attr("y1", function(d) { return d.source.y; })
+    .attr("x2", function(d) { return d.target.x; })
+    .attr("y2", function(d) { return d.target.y; });
+
+  svg.select('.nodes')
+    .selectAll("circle")
+    .attr("cx", function(d) { return d.x; })
+    .attr("cy", function(d) { return d.y; });
+}
+
+function score(graph) {
+  let nodeDict = {};
+  graph.nodes.forEach(n => {
+    nodeDict[n.id] = n;
+    n.edges = [];
+    n.selected = false;
+  });
+  graph.links.forEach(edge => {
+    let s = null;
+    let t = null;
+    if (typeof edge.source == "string") {
+      s = nodeDict[edge.source];
+    } else {
+      s = nodeDict[edge.source.id];
+    }
+    if (typeof edge.target == "string") {
+      t = nodeDict[edge.target];
+    } else {
+      t = nodeDict[edge.target.id];
+    }
+   
+    if (!s.edges) s.edges = [];
+    if (!t.edges) t.edges = [];
+    s.edges.push(edge);
+    t.edges.push(edge);
+  });
+  scoreGraph(graph.nodes);
+  return graph.score;
+}
+
+function scoreGraph(points) {
+  let sum = math.bignumber(0);
+  let plength = points.length;
+  let elength = plength - 1;
+  for (let i = 0; i < plength; i++) {
+    let point = points[i];
+    point.score = math.bignumber(1);
+    let edges = point.edges;
+    for (let j = 0; j < elength; j++) {
+      point.score = math.multiply(point.score, math.bignumber(edges[j].value));
+    }
+    sum = math.add(sum, point.score);
+  }
+  graph.sum = sum;
+  graph.score = math.subtract(sum, targetEnergy);
+  return sum;
+}
+
+
+function calcEnergy(n, edges) {
+  let sum = math.bignumber(1);
+  for (var i = 0; i < edges; i++) {
+    sum = math.multiply(sum, math.bignumber(primes[i]));
+  }
+  return math.ceil(math.multiply(math.pow(sum, math.bignumber(2/n)), n));
+  //Math.ceil(n * Math.pow(sum, 2 / n));
+}
+
+function logGraph(nodes) {
+  let plength = nodes.length;
+  let results = [];
+  for (let i = 0; i < plength; i++) {
+    let point = nodes[i];
+    // point.score = 1;
+    results.push('{' +
+      point.edges.map(e=>e.value).join(',') +
+      '}');
+  }
+  return results.join(',');
+}
+
+function render(graph) {
+  let n = graph.nodes.length;
+  let maxPrime = graph.maxPrime;
+  sizeScale
+    .domain([2, maxPrime])
+    .range([Math.min(width, height)-20, 10]);
+
+  lineScale
+    .domain([2,maxPrime])
+    .range([1,12]);
+
+  let scoreExtent = d3.extent(graph.nodes, n => math.number(n.score));
+  heightScale
+    .domain(scoreExtent)
+    .range([height - 50, 20]);
+
+  xScale.domain(graph.nodes.map(n => n.id));
+
+  var bar = svg.select('.bars')
+    .selectAll('rect.bar')
+    .data(graph.nodes, d => d.id);
+
+  barenter = bar.enter().append('rect').attr('class', 'bar')
+      .on("mouseover", function(d) {
+        d.over = true;
+        render(graph);
+      })
+      .on("mouseout", function(d) {
+        d.over = false;
+        render(graph);
+      })
+      .on("click", function(d) {
+        swapBar(d);
+      });
+  barenter.append('title')
+  barenter
+    .merge(bar)
+      .attr("x", function(d) { return xScale(d.id); })
+      .attr("y", function(d) { return heightScale(math.number(d.score)); })
+      .attr("width", xScale.bandwidth())
+      .attr("height", function(d) { return height-20 - heightScale(math.number(d.score)); })
+      .style('fill', (d) => d.selected ? '#f00' : (d.over ? '#0f0' : undefined))
+      .select('title').text(d => d.edges.map(d => d.value).join(','));
+
+  bar.exit().remove();
+
+  simulation
+    .force("link", d3.forceLink().id(function(d) { return d.id; }).distance(d => sizeScale(d.value)).strength(1)) // * sizeScale(n)
+    // .force("charge", d3.forceManyBody())
+    // .force("circle", d3.forceRadial(Math.min(width, height) - 10, width / 2, height / 2))
+    .force("center", d3.forceCenter(width / 2, height / 2));
+
+  simulation
+      .nodes(graph.nodes);
+
+  simulation.force("link")
+      .links(graph.links);
+
+  var link = svg.select('.links')
+    .selectAll("line.link")
+    .data(graph.links, d => d.source.id + d.target.id);
+
+  var linkenter = link.enter().append("line").attr('class', 'link')
+    .on("click", function(d, i, a) {
+      swap(d);
+    });
+  linkenter.append('title');
+  linkenter
+    .merge(link)
+      .attr("stroke-width", function(d) { return lineScale(d.value); })
+      .style("stroke", d => d.selected ? '#f00' : '#999')
+      .select('title').text(d => d.source.id + ' ' + d.target.id + ' ' + d.value)
+      .attr("x1", function(d) { return d.source.x; })
+      .attr("y1", function(d) { return d.source.y; })
+      .attr("x2", function(d) { return d.target.x; })
+      .attr("y2", function(d) { return d.target.y; });
+  link.exit().remove();
+  
+  var node = svg.select('.nodes')
+    .selectAll("circle")
+    .data(graph.nodes, d => d.id);
+
+  var nodeenter = node.enter().append("circle")
+    .attr("r", 7)
+    .attr("cx", function(d) { return d.x; })
+    .attr("cy", function(d) { return d.y; })
+      .on("click", function(d) {
+        swapBar(d);
+        d.selected = true;
+        render(graph);
+      })
+      .on("mouseover", function(d) {
+        d.over = true;
+        render(graph);
+      })
+      .on("mouseout", function(d) {
+        d.over = false;
+        render(graph);
+      });
+  nodeenter.append('title');
+  nodeenter
+    .merge(node)
+      .attr("fill", d => (d.selected ? '#f00' : (d.over ? '#0f0' :  '#336699')))
+      .select('title').text(d => d.id + ' ' + math.number(d.score));
+  node.exit().remove();
+}
+</script>
